@@ -2,8 +2,8 @@ name: YT Auto Upload Bot
 
 on:
   schedule:
-    # Testing: 03:30 UTC (temporary for verification)
-    - cron: "30 3 * * *"
+    # 08:00 IST = 02:30 UTC (but GitHub uses UTC; we use 02:30 UTC to map to 08:00 IST)
+    - cron: "30 2 * * *"
     # 19:00 IST = 13:30 UTC
     - cron: "30 13 * * *"
   workflow_dispatch:
