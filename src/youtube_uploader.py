@@ -1,5 +1,6 @@
 import os
 import time
+import json
 import logging
 import random
 from google.oauth2.credentials import Credentials
@@ -58,6 +59,49 @@ def upload_video(youtube, filepath: str, caption: str, privacy_status="public", 
                 retry += 1
             else:
                 raise
+    # Log full response for debugging (API returns lots of useful info)
+    logger.info("Upload finished response: %s", json.dumps(response, indent=2))
     video_id = response.get("id")
     logger.info("Upload finished, video id=%s", video_id)
+
+    # Optional: check processing status briefly to help diagnose stuck uploads.
+    # Controlled by environment variable YT_CHECK_PROCESS_SECONDS (int seconds). Default 0 = disabled.
+    try:
+        check_seconds = int(os.getenv("YT_CHECK_PROCESS_SECONDS", "0"))
+    except ValueError:
+        check_seconds = 0
+
+    if video_id and check_seconds > 0:
+        # poll processing status every 5 seconds up to check_seconds
+        logger.info("Checking processing status for video=%s for up to %s seconds", video_id, check_seconds)
+        start = time.time()
+        while time.time() - start < check_seconds:
+            try:
+                details = youtube.videos().list(part="status,processingDetails", id=video_id).execute()
+                items = details.get("items", [])
+                if items:
+                    status = items[0].get("status", {})
+                    proc = items[0].get("processingDetails", {})
+                    logger.info("Video status: %s; processingDetails summary: %s", status, proc.get("processingStatus"))
+                    # If processing has failed, log error and break
+                    if status.get("uploadStatus") in ("rejected", "failed") or proc.get("processingStatus") == "failed":
+                        logger.error("Video processing failed: %s", json.dumps(items[0], indent=2))
+                        break
+                    # If processed, break
+                    if proc.get("processingStatus") == "succeeded":
+                        logger.info("Video processing completed successfully")
+                        break
+            except HttpError as e:
+                logger.exception("Error while checking processing status: %s", e)
+            time.sleep(5)
+
     return video_id
+
+def get_video_details(youtube, video_id: str):
+    """Return full details for a video id (status + processingDetails)"""
+    try:
+        resp = youtube.videos().list(part="status,processingDetails", id=video_id).execute()
+        return resp
+    except HttpError:
+        logger.exception("Failed to fetch video details for %s", video_id)
+        return None
