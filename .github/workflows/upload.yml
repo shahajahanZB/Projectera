@@ -1,5 +1,9 @@
 name: YT Auto Upload Bot
 
+permissions:
+  contents: write
+  issues: write
+
 on:
   schedule:
     # 08:00 IST = 02:30 UTC (but GitHub uses UTC; we use 02:30 UTC to map to 08:00 IST)
@@ -14,6 +18,10 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          # ensure the workflow can push back changes (uses GITHUB_TOKEN)
+          persist-credentials: true
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -30,3 +38,44 @@ jobs:
           REFRESH_TOKEN: ${{ secrets.REFRESH_TOKEN }}
         run: |
           python src/main.py
+
+      - name: Commit and push CSV updates
+        run: |
+          # configure git and push any changes made to data/uploads.csv
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add data/uploads.csv
+          git commit -m "Bot: mark uploaded videos" || echo "No changes to commit"
+          git push
+
+          - name: Open issue for failed uploads
+          env:
+            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          run: |
+            # If any row in data/uploads.csv is marked 'failed', open a GitHub issue for manual investigation
+            python - <<'PY'
+            import csv, os, requests, sys
+            repo = os.environ.get('GITHUB_REPOSITORY')
+            token = os.environ.get('GITHUB_TOKEN')
+            failed = []
+            with open('data/uploads.csv', newline='', encoding='utf-8') as f:
+              reader = csv.DictReader(f)
+              for i, r in enumerate(reader, start=1):
+                if str(r.get('uploaded','')).strip().lower() == 'failed':
+                  failed.append((i, r.get('gdrive_link'), r.get('video_id','')))
+            if not failed:
+              print('No failed uploads detected')
+              sys.exit(0)
+
+            title = f"YT Auto Upload Bot: {len(failed)} failed upload(s) detected"
+            body = 'The CI bot marked the following rows as failed during the upload run:\n\n'
+            for idx, link, vid in failed:
+              body += f'- row {idx}: link={link} video_id={vid}\n'
+
+            url = f'https://api.github.com/repos/{repo}/issues'
+            headers = {'Authorization': f'Bearer {token}', 'Accept': 'application/vnd.github.v3+json'}
+            resp = requests.post(url, json={'title': title, 'body': body}, headers=headers)
+            print('Issue create response', resp.status_code, resp.text)
+            if resp.status_code >= 300:
+              sys.exit(1)
+            PY
