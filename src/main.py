@@ -5,7 +5,7 @@ import shutil
 
 from csv_utils import get_next_row, mark_uploaded
 from gdrive_utils import download_video
-from youtube_uploader import get_youtube_client_from_refresh_token, upload_video
+from youtube_uploader import get_youtube_client_from_refresh_token, upload_video, get_video_details
 
 TEMP_DIR = "videos"
 TEMP_FILE = os.path.join(TEMP_DIR, "tmp_video.mp4")
@@ -40,8 +40,32 @@ def run_once():
         video_id = upload_video(youtube, TEMP_FILE, caption or "")
         logger.info("Uploaded video id=%s", video_id)
 
-        logger.info("Marking CSV as uploaded...")
-        mark_uploaded(idx)
+        # Fetch video details (processing status) so we can record video_id and status
+        details = None
+        if video_id:
+            try:
+                details = get_video_details(youtube, video_id)
+                logger.info("Video details: %s", details)
+            except Exception:
+                logger.exception("Failed fetching video details for %s", video_id)
+
+        # Mark the CSV row with video_id; record 'failed' if processing indicates failure
+        status = "yes"
+        try:
+            if details:
+                items = details.get("items", [])
+                if items:
+                    proc = items[0].get("processingDetails", {})
+                    upload_status = items[0].get("status", {}).get("uploadStatus")
+                    proc_status = proc.get("processingStatus")
+                    logger.info("UploadStatus=%s, processingStatus=%s", upload_status, proc_status)
+                    if upload_status in ("rejected", "failed") or proc_status == "failed":
+                        status = "failed"
+        except Exception:
+            logger.exception("Error evaluating processing status for %s", video_id)
+
+        logger.info("Marking CSV as '%s' and recording video_id=%s", status, video_id)
+        mark_uploaded(idx, video_id=video_id, status=status)
 
     finally:
         # clean up
